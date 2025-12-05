@@ -1,0 +1,26 @@
+FROM python:3.10
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+COPY src/ /code/
+WORKDIR /code
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install poetry==1.8.2
+
+COPY src/pyproject.toml src/poetry.lock* /code/
+
+# Install Python dependencies
+
+RUN poetry config virtualenvs.create false && poetry install --only main --no-root --no-cache
+
+# Copy project
+
+
+# Run migrations and start server
+CMD python manage.py migrate && python manage.py runserver 0.0.0.0:8000

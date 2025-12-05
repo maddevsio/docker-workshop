@@ -1,0 +1,37 @@
+FROM python:3.10 AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /code
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install poetry
+
+COPY src/pyproject.toml src/poetry.lock* /code/
+
+
+# Stage 2: Development and testing with dev dependencies
+FROM base AS test
+
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi
+
+COPY src/ /code/
+
+RUN python manage.py test
+
+
+# Stage 3: Production build without dev dependencies
+FROM base AS production
+
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi --no-dev
+
+COPY src/ /code/
+
+CMD python manage.py migrate && python manage.py runserver 0.0.0.0:8000
