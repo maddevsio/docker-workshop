@@ -1,0 +1,251 @@
+version: '3.8'
+
+networks:
+  nft_market:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  minio_data:
+  rabbitmq:
+
+services:
+  # Used for local development -------------------------------------------------------------------------------------------
+  mariadb-local:
+    container_name: nft_market_mariadb
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: nft_market
+      MYSQL_PASSWORD: root
+    healthcheck:
+      test: [ "CMD", "mysqladmin" ,"ping", "-h", "localhost" ]
+      start_period: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:3306:3306"
+    networks:
+      - nft_market
+
+  rabbitmq-local:
+    image: rabbitmq:3.12.6-management
+    container_name: nft_market_rabbitmq
+    hostname: nftmarketrabbitmq.amqp
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: hare
+      RABBITMQ_DEFAULT_PASS: password
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq/
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    networks:
+      - nft_market
+    logging:
+      driver: syslog
+      options:
+        tag: "docker/nft_market_rabbitmq"
+
+  redis-local:
+    image: redis:6.2-alpine
+    container_name: nft_market_redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+      start_period: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nft_market
+
+  minio-local:
+    image: minio/minio:RELEASE.2023-04-07T05-28-58Z
+    container_name: nft_market_minio
+    # We need very valid f*king domain for minio to be accessible by f*king boto3
+    # because for some unknown reason boto3 library needs to validate domain with sh*tty regex
+    hostname: nftmarketminio.minio
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minio_root_user
+      MINIO_ROOT_PASSWORD: minio_root_user_password
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live" ]
+      start_period: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nft_market
+
+  backend-local:
+    container_name: nft_market_backend
+    build:
+      context: ./
+      dockerfile: Dockerfile-local
+    command: bash -c "./manage.py migrate && ./manage.py runserver 0.0.0.0:8000"
+    environment:
+      DJANGO_SETTINGS_MODULE: "nft_market.settings_dev"
+      DJANGO_DEFAULT_DATABASE: "mysql://root:root@nft_market_mariadb:3306/nft_market?isolation_level=repeatable read&charset=utf8mb4"
+      REDIS_HOST: "nft_market_redis"
+      AWS_S3_ENDPOINT_URL: "http://nftmarketminio.minio:9000"
+    depends_on:
+      mariadb-local:
+        condition: service_healthy
+      minio-local:
+        condition: service_healthy
+      redis-local:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://127.0.0.1:8000/health/" ]
+      start_period: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nft_market
+
+  auto-explorer-local:
+    container_name: nft_market_auto_explorer
+    build:
+      context: ./
+      dockerfile: Dockerfile-local
+    command: bash -c "./manage.py migrate && ./manage.py auto_explorer"
+    environment:
+      DJANGO_SETTINGS_MODULE: "nft_market.settings_dev"
+      DJANGO_DEFAULT_DATABASE: "mysql://root:root@nft_market_mariadb:3306/nft_market?isolation_level=repeatable read&charset=utf8mb4"
+      REDIS_HOST: "nft_market_redis"
+    depends_on:
+      mariadb-local:
+        condition: service_healthy
+      minio-local:
+        condition: service_healthy
+      redis-local:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - nft_market
+
+  # Used for running tests on CI -----------------------------------------------------------------------------------------
+  mariadb-ci:
+    container_name: nft_market_mariadb_ci
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: nft_market
+      MYSQL_PASSWORD: root
+    healthcheck:
+      test: [ "CMD", "mysqladmin" ,"ping", "-h", "localhost" ]
+      start_period: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nft_market
+
+  redis-ci:
+    image: redis:6.2-alpine
+    container_name: nft_market_redis_ci
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+      start_period: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nft_market
+
+  backend-ci-arm64:
+    container_name: nft_market_backend_ci_arm64
+    build:
+      context: ./
+      dockerfile: Dockerfile-ci
+    command: [ "make", "all-checks" ]
+    environment:
+      DJANGO_DEFAULT_DATABASE: "mysql://root:root@nft_market_mariadb_ci:3306/nft_market?&isolation_level=repeatable read&charset=utf8mb4"
+      DJANGO_REDIS_HOST: "nft_market_redis_ci"
+      L15_MODULE: "arm_docker"
+    depends_on:
+      mariadb-ci:
+        condition: service_healthy
+      redis-ci:
+        condition: service_healthy
+    networks:
+      - nft_market
+
+  backend-ci-x86:
+    container_name: nft_market_backend_ci_x86
+    build:
+      context: ./
+      dockerfile: Dockerfile-ci
+    command: [ "make", "all-checks" ]
+    environment:
+      DJANGO_DEFAULT_DATABASE: "mysql://root:root@nft_market_mariadb_ci:3306/nft_market?&isolation_level=repeatable read&charset=utf8mb4"
+      DJANGO_REDIS_HOST: "nft_market_redis_ci"
+      L15_MODULE: "x86"
+    depends_on:
+      mariadb-ci:
+        condition: service_healthy
+      redis-ci:
+        condition: service_healthy
+    networks:
+      - nft_market
+
+  backend-update-snapshots:
+    build:
+      context: ./
+      dockerfile: Dockerfile-local
+    command: [ "make", "update-snapshots" ]
+    environment:
+      DJANGO_DEFAULT_DATABASE: "mysql://root:root@nft_market_mariadb_ci:3306/nft_market?&isolation_level=repeatable read&charset=utf8mb4"
+      DJANGO_REDIS_HOST: "nft_market_redis_ci"
+      L15_MODULE: "arm_docker"
+    depends_on:
+      mariadb-ci:
+        condition: service_healthy
+      redis-ci:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - nft_market
+
+  backend-coverage:
+    build:
+      context: ./
+      dockerfile: Dockerfile-local
+    command: ["make", "test-coverage"]
+    environment:
+      DJANGO_DEFAULT_DATABASE: "mysql://root:root@nft_market_mariadb_ci:3306/nft_market?&isolation_level=repeatable read&charset=utf8mb4"
+      DJANGO_REDIS_HOST: "nft_market_redis_ci"
+      L15_MODULE: "arm_docker"
+    depends_on:
+      mariadb-ci:
+        condition: service_healthy
+      redis-ci:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - nft_market

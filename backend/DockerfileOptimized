@@ -10,10 +10,17 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /code
 
-RUN pip install poetry==1.8.2
+# Install poetry with pip cache
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install poetry==2.1.3
+
 COPY src/pyproject.toml src/poetry.lock* /code/
-RUN poetry config virtualenvs.create false && poetry install --only main --no-root --no-cache
+
+# Install dependencies with poetry cache
+RUN --mount=type=cache,target=/root/.cache/pypoetry \
+    poetry config virtualenvs.create false && \
+    poetry install --only main --no-root
 
 COPY src/ /code/
 
-CMD python manage.py runserver 0.0.0.0:8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
