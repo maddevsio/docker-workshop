@@ -10,4 +10,7 @@ docker compose -f docker-compose.better.yml up -d
 
 # Merge compose files
 docker compose -f docker-compose.better.yml -f docker-compose.override.yml up -d
+
+# Merge compose files and watch for changes
+docker compose -f docker-compose.better.yml -f docker-compose.override.yml up --watch
 ```
